@@ -29,48 +29,74 @@ The script includes error handling to manage exceptions during API calls, ensuri
 Intended Use:
 This script is intended for IT administrators managing large Windows environments who need to enforce compliance with specific update policies and ensure that critical updates are installed in a timely manner.
 
-Author: Max Weber - intuneblog.org
+Author: Max Weber - intune-blog.com
 Date: 2024/08/06
 ###>
 
+# Set Error Action Preference to Stop
+$ErrorActionPreference = 'Stop'
+
 # How many cumulative updates should be treated as compliant? 
 $numberOfUpdates = 3
+Write-Verbose "Number of Updates treated as compliant: $numberOfUpdates"
 
 # Allow all new builds by setting highestVersion to 10.0.*****.9999
 $allowNewerBuilds = $true
+Write-Verbose "Allow Newer Builds: $allowNewerBuilds"
 
 # Set this to nonSecurity if you are deploying the monthly cumulative update preview updates [security / nonSecurity]
 $updateClassification = 'security'
+Write-Verbose "Update Classification: $updateClassification"
 
 # Id of the compliance policy to update
-$compliancePolicyId = '6a6207c6-720a-49f2-96fe-fb519127dad0'
+$compliancePolicyId = 'bbd4352f-76cc-4417-b845-1da8bc8d68d1'
+Write-Verbose "Compliance Policy Id: $compliancePolicyId"
 
 # Define the Windows versions that should be handled
 $validBuildNumbers = @('19044', '19045', '22621', '22631','26100')
+Write-Verbose "Windows Version that will be handled: $validBuildNumbers"
 
 # Enable update of Quality Update Policy to expedite update installation
 $expediteQualityUpdate = $true
+Write-Verbose "Expedite Quality Update Policy enabled: $expediteQualityUpdate"
+
 # Id of the Quality Update policy
-$qualityUpdatePolicyId = '45743b48-c406-4c1c-a71e-f5b5a0585782'
+$qualityUpdatePolicyId = '97678ed0-c04d-4299-b861-170b1c63e3fc'
+Write-Verbose "Quality Update Policy Id: $qualityUpdatePolicyId"
+
 # Prefix for the display name of the quality update policy
 $qualityUpdatePolicyDisplayNamePrefix = 'WIN - Updates - Expedite Windows Updates - D - '
+Write-Verbose "Quality Update Policy Display Name prefix: $qualityUpdatePolicyDisplayNamePrefix"
+
 # Days until reboot is enforced (0-2)
 $qualityUpdatePolicyDaysUntilReboot = 1
+Write-Verbose "Quality Update Policy days until reboot: $qualityUpdatePolicyDaysUntilReboot"
 
-<#
-# Connecto Managed Identity
-Connect-AzAccount -Identity
+try {
+    Write-Verbose "Establishing Connection to Graph API"
 
-# Get Credentials from Key Vault
-$TenantId = Get-AzKeyVaultSecret -VaultName '<YOUR VAULT NAME HERE>' -Name 'tenant' -AsPlainText
-$ClientId = Get-AzKeyVaultSecret -VaultName '<YOUR VAULT NAME HERE>' -Name 'clientid' -AsPlainText
-$ClientSecretCredential = Get-AzKeyVaultSecret -VaultName '<YOUR VAULT NAME HERE>' -Name 'clientsecret' -AsPlainText
-$Creds = [System.Management.Automation.PSCredential]::new($ClientId, (ConvertTo-SecureString $ClientSecretCredential -AsPlainText -Force))
+    # Connecto Managed Identity
+    Connect-AzAccount -Identity | Out-Null
+    Update-AzConfig -DisplaySecretsWarning $false | Out-Null
 
-Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $creds -NoWelcome
-#>
-# For local testing
-Connect-MgGraph -Scopes WindowsUpdates.ReadWrite.All,DeviceManagementConfiguration.ReadWrite.All
+    # Get Credentials from Key Vault
+    $VaultName = 'intune-blog-vault'
+    $TenantId = Get-AzKeyVaultSecret -VaultName $VaultName -Name 'tenantid' -AsPlainText
+    $ClientId = Get-AzKeyVaultSecret -VaultName $VaultName -Name 'clientid' -AsPlainText
+    $ClientSecretCredential = Get-AzKeyVaultSecret -VaultName $VaultName -Name 'clientsecret' -AsPlainText
+    $Creds = [System.Management.Automation.PSCredential]::new($ClientId, (ConvertTo-SecureString $ClientSecretCredential -AsPlainText -Force))
+
+    Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $creds -NoWelcome
+
+    # For local testing
+    #Connect-MgGraph -Scopes WindowsUpdates.ReadWrite.All,DeviceManagementConfiguration.ReadWrite.All
+
+    Write-Verbose "Connection to Graph API established"
+}
+    catch {
+        Write-Error "Failed to connect to MgGraph: $_"
+        Exit 1
+    }
 
 ####################################################################################################################
  
@@ -78,12 +104,15 @@ Connect-MgGraph -Scopes WindowsUpdates.ReadWrite.All,DeviceManagementConfigurati
 # Get Update Release Information
 try {
     #Create filter statement
+    Write-Verbose "Creating filter Statement for Windows Update query"
     $filter = '$filter=microsoft.graph.windowsUpdates.qualityUpdateCatalogEntry/qualityUpdateClassification eq ''' + $updateClassification  + '''&' 
     $uri = 'https://graph.microsoft.com/beta/admin/windows/updates/catalog/entries?$select=microsoft.graph.windowsUpdates.qualityUpdateCatalogEntry/productRevisions&$expand=microsoft.graph.windowsUpdates.qualityUpdateCatalogEntry/productRevisions&' + $filter + '$orderby=releaseDateTime%20desc&$top=' + $numberOfUpdates
+    Write-Verbose "Request URI: $uri"
     $productRevisions = $(Invoke-MgGraphRequest -Method GET -Uri $uri).value.productRevisions
+    Write-Verbose "Successfully received update data"
 }
 catch {
-    Write-Error $_
+    Write-Error "Failed to get update data. Do you have the required license? Error: $_"
     Exit 1
 }
 
@@ -91,6 +120,7 @@ catch {
 $validOperatingSystemBuildRanges = @()
 $expediteQualityUpdateReleaseTime = ""
 
+Write-Verbose "Constructing valid builds object for compliance policy"
 $validBuildNumbers | ForEach-Object {
     [array]$versions = $productRevisions | Where-Object id -match "10.0.$_" | Sort-Object -Property releaseDateTime
     if($versions) {
@@ -108,7 +138,7 @@ $validBuildNumbers | ForEach-Object {
             $expediteQualityUpdateReleaseTime = $lowestVersion.releaseDateTime
         }
         
-        Write-Host "$($highestVersion.product) - $($highestVersion.version): $($buildRangeObject.lowestVersion) - $($buildRangeObject.highestVersion)"
+        Write-Verbose "$($highestVersion.product) - $($highestVersion.version): $($buildRangeObject.lowestVersion) - $($buildRangeObject.highestVersion)"
         Clear-Variable lowestVersion, highestVersion, buildRangeObject, versions
     }
     else {
@@ -122,31 +152,43 @@ if (-not $validOperatingSystemBuildRanges -or (-not $validOperatingSystemBuildRa
 }
 
 # Patch Compliance Policy
-$body = @{
+Write-Verbose "Updating Compliance Policy"
+
+$compliancePolicyBody = @{
     "@odata.type" = "#microsoft.graph.windows10CompliancePolicy";
     "validOperatingSystemBuildRanges" = $validOperatingSystemBuildRanges
 }
-try {
-    Invoke-MgGraphRequest -Method PATCH -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies/$compliancePolicyId" -Body $body
+
+try {    
+    Invoke-MgGraphRequest -Method PATCH -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies/$compliancePolicyId" -Body $compliancePolicyBody
+    Write-Verbose "Successfully updated Compliance Policy"
 }
 catch {
-    Write-Error $_
+    Write-Error "Failed to update compliance policy: $_"
 }
 
 
-# Patch Quality Update Policy 
-if ($expediteQualityUpdate) {    
-    $body = @{
-        "displayName" = $qualityUpdatePolicyDisplayNamePrefix + $expediteQualityUpdateReleaseTime
+# Patch Quality Update Policy
+if ($expediteQualityUpdate) {
+    Write-Verbose "Updating Expedite Quality Update Policy"   
+    
+    $expediteQualityUpdateBody = @{
+        "displayName" = $qualityUpdatePolicyDisplayNamePrefix + $(Get-Date $([DateTime]$expediteQualityUpdateReleaseTime) -Format "yyyy.MM")
         "expeditedUpdateSettings" = @{
             "daysUntilForcedReboot" = $qualityUpdatePolicyDaysUntilReboot;
             "qualityUpdateRelease" = $expediteQualityUpdateReleaseTime;
         }
     }
+    Write-Verbose "Display Name: $($expediteQualityUpdateBody.displayName)"
+    Write-Verbose "Quality Update Release: $($expediteQualityUpdateBody.expeditedUpdateSettings.qualityUpdateRelease)"
+
     try {
-        Invoke-MgGraphRequest -Method PATCH -Uri "https://graph.microsoft.com/beta/deviceManagement/windowsQualityUpdateProfiles/$qualityUpdatePolicyId" -Body $body        
+        Invoke-MgGraphRequest -Method PATCH -Uri "https://graph.microsoft.com/beta/deviceManagement/windowsQualityUpdateProfiles/$qualityUpdatePolicyId" -Body $expediteQualityUpdateBody        
+        Write-Verbose "Successfully updated Expedite Quality Update Policy"
     }
     catch {
-        Write-Error $_
+        Write-Error "Failed to update Expedite Quality Update policy: $_"
     }
 }
+
+Write-Verbose "Script execution finished"
