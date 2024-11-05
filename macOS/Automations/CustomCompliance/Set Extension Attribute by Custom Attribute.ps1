@@ -1,17 +1,26 @@
 <#
-Author: Max Weber / http://blog.maxweber.org
 
-Version 1.0 - 2024/01/08
+.SYNOPSIS
 
-This script is used to implement a similar functionality like Custom Compliance Scripts for Windows devices.
-This script collects all macOS devices from Intune that have a specific result from custom attribute script execution.
-For these devices ExtensionAttribute1 is set to "Compliant". Devices that already have the ExtAttr. but aren't compliant anymore, the ExtAttr. will be cleared.
-The ExtensionAttribute1 can be used as a device filter on a Conditional Access policy.
+    This script is used to implement a similar functionality like Custom Compliance Scripts for Windows devices. 
+
+.DESCRIPTION
+
+    This script collects all macOS devices from Intune that have a specific result from custom attribute script execution.
+    For these devices ExtensionAttribute1 is set to "Compliant". Devices that already have the ExtAttr. but aren't compliant anymore, the ExtAttr. will be cleared.
+    The ExtensionAttribute1 can be used as a device filter on a Conditional Access policy.
+    
+
+.NOTES
+
+    Author           : Max Weber / https://www.intune-blog.com
+
+    Contact          : input(at)intune-blog.com
 
 #>
 
 # ID of the Custom Attribute Script in Intune
-$scriptId = "5066b9f8-da82-48b5-a925-8628207d8656"
+$scriptId = "<Paste ID of Custom Attribute Script here"
 
 # Required Output of the script for a device to be 'compliant'
 $desiredResult = "Running"
